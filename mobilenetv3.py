@@ -6,7 +6,7 @@ Mobile Networks for Classification, Detection and Segmentation" for more details
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-
+import time
 
 
 class hswish(nn.Module):
@@ -204,12 +204,44 @@ class MobileNetV3_Large(nn.Module):
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        out = self.hs1(self.bn1(self.conv1(x)))
-        out = self.bneck(out)
+    # def forward(self, x):
+    #     times = {} 
+    #     start_time = time.time()
 
+    #     out = self.hs1(self.bn1(self.conv1(x)))
+    #     out = self.bneck(out)
+
+    #     out = self.hs2(self.bn2(self.conv2(out)))
+    #     out = self.gap(out).flatten(1)
+    #     out = self.drop(self.hs3(self.bn3(self.linear3(out))))
+    #     times['total'] = time.time()-start_time
+        
+    #     return self.linear4(out), times
+                    
+    def forward(self, x):
+        times = {}  # Dictionary to store the inference times
+
+        start_time = time.time()
+        out = self.hs1(self.bn1(self.conv1(x)))
+        times['conv1 + bn1 + hs1'] = time.time() - start_time
+
+        # Manually iterate through each Block in bneck to measure time
+        for idx, block in enumerate(self.bneck, start=1):
+            start_time = time.time()
+            out = block(out)
+            times[f'bneck Block {idx}'] = time.time() - start_time
+
+        start_time = time.time()
         out = self.hs2(self.bn2(self.conv2(out)))
         out = self.gap(out).flatten(1)
+        times['conv2 + bn2 + hs2 + gap'] = time.time() - start_time
+
+        start_time = time.time()
         out = self.drop(self.hs3(self.bn3(self.linear3(out))))
-        
-        return self.linear4(out)
+        times['linear3 + bn3 + hs3 + drop'] = time.time() - start_time
+
+        start_time = time.time()
+        out = self.linear4(out)
+        times['linear4'] = time.time() - start_time
+
+        return out, times
