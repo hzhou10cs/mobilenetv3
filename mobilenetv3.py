@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 import time
+from jtop import jtop
 
 
 class hswish(nn.Module):
@@ -140,15 +141,105 @@ class MobileNetV3_Small(nn.Module):
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        out = self.hs1(self.bn1(self.conv1(x)))
-        out = self.bneck(out)
+    # def forward(self, x):
+    #     out = self.hs1(self.bn1(self.conv1(x)))
+    #     out = self.bneck(out)
 
-        out = self.hs2(self.bn2(self.conv2(out)))
-        out = self.gap(out).flatten(1)
-        out = self.drop(self.hs3(self.bn3(self.linear3(out))))
+    #     out = self.hs2(self.bn2(self.conv2(out)))
+    #     out = self.gap(out).flatten(1)
+    #     out = self.drop(self.hs3(self.bn3(self.linear3(out))))
 
-        return self.linear4(out)
+    #     return self.linear4(out)
+    def forward(self, x, mode):
+        times = {}  # Dictionary to store the inference times
+        avg_times = 10000
+        check_interval = 0.5
+        
+        if mode == 'energy':
+            with jtop(interval=check_interval) as jetson:
+                for i in range(avg_times):
+                    out = self.hs1(self.bn1(self.conv1(x)))
+                if jetson.ok():
+                    print('conv1 + bn1 + hs1')
+                    print(jetson.power['rail'])
+        elif mode == 'latency':
+            start_time = time.time()
+            out = self.hs1(self.bn1(self.conv1(x)))
+            times['conv1 + bn1 + hs1'] = time.time() - start_time
+        else:
+             out = self.hs1(self.bn1(self.conv1(x)))
+
+
+        # Manually iterate through each Block in bneck to measure time
+        for idx, block in enumerate(self.bneck, start=1):
+            start_time = time.time()
+            if mode == 'energy':
+                with jtop(interval=check_interval) as jetson:
+                    out_m = out
+                    for i in range(avg_times):
+                        out = block(out_m)
+                    if jetson.ok():
+                        print(f'bneck Block {idx}')
+                        print(jetson.power['rail'])
+            elif mode == 'latency':
+                start_time = time.time()
+                out = block(out)            
+                times[f'bneck Block {idx}'] = time.time() - start_time
+            else:
+                out = block(out)
+
+
+        if mode == 'energy':
+            with jtop(interval=check_interval) as jetson:
+                out_m = out
+                for i in range(avg_times):
+                    out = self.hs2(self.bn2(self.conv2(out_m)))
+                    out = self.gap(out).flatten(1)
+                if jetson.ok():
+                    print('conv2 + bn2 + hs2 + gap')
+                    print(jetson.power['rail'])
+        elif mode == 'latency':
+            start_time = time.time()
+            out = self.hs2(self.bn2(self.conv2(out)))
+            out = self.gap(out).flatten(1)
+            times['conv2 + bn2 + hs2 + gap'] = time.time() - start_time
+        else:
+            out = self.hs2(self.bn2(self.conv2(out)))
+            out = self.gap(out).flatten(1)
+
+        
+        if mode == 'energy':
+            with jtop(interval=check_interval) as jetson:
+                out_m = out
+                for i in range(avg_times):
+                    out = self.drop(self.hs3(self.bn3(self.linear3(out_m))))
+                if jetson.ok():
+                    print('linear3 + bn3 + hs3 + drop')
+                    print(jetson.power['rail'])
+        elif mode == 'latency':
+            start_time = time.time()
+            out = self.drop(self.hs3(self.bn3(self.linear3(out))))
+            times['linear3 + bn3 + hs3 + drop'] = time.time() - start_time
+        else:
+            out = self.drop(self.hs3(self.bn3(self.linear3(out))))
+
+       
+        if mode == 'energy':
+            with jtop(interval=check_interval) as jetson:
+                out_m = out
+                for i in range(avg_times):
+                    out = self.linear4(out_m)
+                if jetson.ok():
+                    print('linear4')
+                    print(jetson.power['rail'])
+        elif mode == 'latency':
+            start_time = time.time()
+            out = self.linear4(out)
+            times['linear4'] = time.time() - start_time
+        else:
+            out = self.linear4(out)
+
+        return out, times
 
 
 class MobileNetV3_Large(nn.Module):

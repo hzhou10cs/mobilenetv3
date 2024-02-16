@@ -1,3 +1,4 @@
+import numpy
 import torch
 from torchsummary import summary
 from mobilenetv3 import MobileNetV3_Small, MobileNetV3_Large
@@ -8,11 +9,12 @@ import time
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
+from jtop import jtop
 
-target_model = 'large'
+target_model = 'small'
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device = torch.device("cpu")
+#device = torch.device("cpu")
 print(device)
 
 if target_model == 'small':
@@ -27,12 +29,11 @@ else:
 
 model.eval()
 print(type(model))
-print(summary(model, (3,224,224),device='cuda'))
+# print(summary(model, (3,224,224),device='cuda'))
 
-macs, params = get_model_complexity_info(model, (3, 224, 224), as_strings=True,
-                                           print_per_layer_stat=False, verbose=True)
-print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
-print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+#macs, params = get_model_complexity_info(model, (3, 224, 224), as_strings=True, print_per_layer_stat=False, verbose=True)
+#print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+#print('{:<30}  {:<8}'.format('Number of parameters: ', params))
 
 # dataset = foz.load_zoo_dataset("imagenet-sample")
 # session = fo.launch_app(dataset)
@@ -41,9 +42,9 @@ print('{:<30}  {:<8}'.format('Number of parameters: ', params))
 # Load the labels.json file
 labels_file_path = './imagenet-sample/labels.json'
 with open(labels_file_path, 'r') as file:
-    label_dict = json.load(file)
-    classes = label_dict['classes']
-    labels = label_dict['labels']
+   label_dict = json.load(file)
+   classes = label_dict['classes']
+   labels = label_dict['labels']
 
 class ImageNetSubset(Dataset):
     def __init__(self, image_folder, labels, transform=None):
@@ -90,31 +91,68 @@ dataloader = DataLoader(dataset, batch_size=1, shuffle=False)  # Adjust batch_si
 accuracy = 0
 start_time = time.time()
 
+print("Begining inference")
+# with torch.no_grad():
+#     for i, (images, gt_labels) in enumerate(dataloader):
+#         images, gt_labels = images.to(device), gt_labels.to(device)
+#         # warming up
+#         # if i == 0:
+#         #     for _ in range(1000):
+#         #         output, inference_times = model(images)
+#         #     print("finish warm up ....")
+
+#         output, inference_times = model(images)
+#         _, pred_labels = torch.max(output,1)
+#         if gt_labels == pred_labels:
+#             accuracy += 1
+
+#         print(f"Inference times for image {i+1}:")
+#         total_time = 0
+#         for part, time_taken in inference_times.items():
+#             print(f"{part}: {time_taken:.6f} seconds")
+#             total_time += time_taken
+#         print(f"Total inference times is {total_time:.6f} seconds")
+
+#         break  # Break here just to demonstrate; remove this in your actual testing loop
+
+# total_inference_time = time.time()-start_time
+# print(f"Total time duration of 1000 inferences: {total_inference_time:.6f} seconds")
+# accuracy = accuracy/len(dataloader)
+# print("Accuracy for 1000 classes: ", accuracy)
+
+iter_times = 10
+data_record = {}
+mode_record = 'latency'
 with torch.no_grad():
+    data_num = 0
+    #------------- WARM UP ----------------
     for i, (images, gt_labels) in enumerate(dataloader):
-        images, gt_labels = images.to(device), gt_labels.to(device)
-        # warming up
-        if i == 0:
-            for _ in range(1000):
-                output, inference_times = model(images)
-            print("finish warm up ....")
+            images, gt_labels = images.to(device), gt_labels.to(device)
+            _, _ = model(images, mode_record)
+    #------------- RECORD START -----------
+    for iter_time in range(iter_times):
+        for i, (images, gt_labels) in enumerate(dataloader):
+            images, gt_labels = images.to(device), gt_labels.to(device)
+            # warming up
+            # if i == 0:
+            #     for _ in range(1000):
+            #         output, inference_times = model(images)
+            #     print("finish warm up ....")
 
-        output, inference_times = model(images)
-        _, pred_labels = torch.max(output,1)
-        if gt_labels == pred_labels:
-            accuracy += 1
+            output, inference_times = model(images, mode_record)
+            _, pred_labels = torch.max(output,1)
+            if gt_labels == pred_labels:
+                accuracy += 1
 
-        print(f"Inference times for image {i+1}:")
-        total_time = 0
-        for part, time_taken in inference_times.items():
-            print(f"{part}: {time_taken:.6f} seconds")
-            total_time += time_taken
-        print(f"Total inference times is {total_time:.6f} seconds")
+            # print(f"Inference times for image {i+1}:")
+            total_time = sum(inference_times.values())
+            print(f"Total inference times is {total_time:.6f} seconds")
+            inference_times["total_time"] = total_time
+            data_record[data_num] = inference_times
+            data_num += 1
 
-        break  # Break here just to demonstrate; remove this in your actual testing loop
-
-total_inference_time = time.time()-start_time
-print(f"Total time duration of 1000 inferences: {total_inference_time:.6f} seconds")
 accuracy = accuracy/len(dataloader)
 print("Accuracy for 1000 classes: ", accuracy)
 
+with open('tx2_inf_latency.json','w') as fp:
+    json.dump(data_record, fp)
